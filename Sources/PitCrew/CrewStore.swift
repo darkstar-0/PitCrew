@@ -92,6 +92,18 @@ final class CrewStore: ObservableObject {
     /// Which agent's detail view is open (nil = the list).
     @Published var selectedID: String?
 
+    /// A Theme id or Theme.autoID. Remembered between launches.
+    @Published var themeID: String = UserDefaults.standard.string(forKey: "theme") ?? Theme.pitLane.id {
+        didSet { UserDefaults.standard.set(themeID, forKey: "theme") }
+    }
+
+    /// 🎨 button: steps through every theme, then Auto, then back to the first.
+    func cycleTheme() {
+        let order = Theme.all.map(\.id) + [Theme.autoID]
+        let i = order.firstIndex(of: themeID) ?? -1
+        themeID = order[(i + 1) % order.count]
+    }
+
     var selectedAgent: Agent? {
         guard let id = selectedID else { return nil }
         return visibleAgents.first { $0.id == id }

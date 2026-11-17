@@ -63,8 +63,19 @@ itself): `./scripts/demo.py --fast`.
 - **↗** brings that project's VS Code window to the front.
 - **✕** on a card hides it until the agent needs you again. **✕** in the header hides the panel.
 - **🔊** mutes the sounds.
+- **🎨** cycles through the themes. Or pick one from the menu bar icon → **Theme**.
 - **Drag the header** to move the panel. It stays pinned by its top-right corner.
-- **Menu bar icon**: Show Pit Crew, Reset Position, Launch at Login, Quit.
+- **Menu bar icon**: Show Pit Crew, Reset Position, Theme, Launch at Login, Quit.
+
+### Themes
+
+Six built-in themes: **Pit Lane** (the default, graphite + lime), **Daylight**,
+**Midnight**, **Rosso**, **Papaya** and **Powder Blue**. **Auto** follows macOS,
+using Pit Lane in dark mode and Daylight in light mode. Your choice is remembered.
+
+To add your own, copy one of the `static let` themes in
+[`Sources/PitCrew/Theme.swift`](Sources/PitCrew/Theme.swift), change the colors,
+and add it to `Theme.all`.
 
 ## How it works
 
@@ -121,6 +132,7 @@ Sources/PitCrew/     the app (SwiftUI + AppKit, no dependencies)
   EventServer.swift    tiny HTTP server for the hooks
   CrewStore.swift      turns hook events into agent state
   Views.swift          cards, detail view, buttons, robots
+  Theme.swift          color themes
 hooks/               scripts Claude Code runs + settings installer
 scripts/             build-app.sh, install-hooks.sh, demo.py, uninstall.sh
 Resources/           Info.plist and the app icon

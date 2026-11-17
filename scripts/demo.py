@@ -375,6 +375,7 @@ def main():
 
     # 7 ─ wrap
     scene(7, "Try the controls",
+          "  🎨  cycle through the color themes (also in the menu bar → Theme)\n"
           "  ⌃   collapse to the “N agents running” pill (click it to expand)\n"
           "  ↗   jump to that agent's VS Code window\n"
           "  ✕   on a card hides it; ✕ in the header hides the panel (menu bar icon brings it back)\n"

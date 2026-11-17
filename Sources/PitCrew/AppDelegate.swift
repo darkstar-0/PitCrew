@@ -138,8 +138,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: Themes
+
+    var themeMenu: NSMenu!
+
+    func buildThemeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        let auto = menu.addItem(withTitle: "Auto (match macOS)", action: #selector(selectTheme(_:)), keyEquivalent: "")
+        auto.target = self
+        auto.representedObject = Theme.autoID
+        menu.addItem(.separator())
+        for theme in Theme.all {
+            let item = menu.addItem(withTitle: theme.name, action: #selector(selectTheme(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = theme.id
+        }
+        return menu
+    }
+
+    @objc func selectTheme(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { store.themeID = id }
+    }
+
+    func refreshThemeMenu() {
+        for item in themeMenu?.items ?? [] {
+            item.state = (item.representedObject as? String) == store.themeID ? .on : .off
+        }
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         refreshLoginItem()
+        refreshThemeMenu()
     }
 
     // MARK: Menu bar
@@ -153,6 +183,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.addItem(withTitle: "Show Pit Crew", action: #selector(showPanel), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reset Position", action: #selector(resetPosition), keyEquivalent: "").target = self
+        themeMenu = buildThemeMenu()
+        let themeItem = menu.addItem(withTitle: "Theme", action: nil, keyEquivalent: "")
+        themeItem.submenu = themeMenu
         menu.addItem(.separator())
         loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
