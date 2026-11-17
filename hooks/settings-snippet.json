@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "PreToolUse":        [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "PostToolUse":       [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "Notification":      [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "Stop":              [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/permission.sh", "timeout": 600 }] }]
+  }
+}
