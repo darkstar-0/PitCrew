@@ -40,7 +40,10 @@ make demo      # guided tour with fake agents: try every feature in ~3 minutes
 Then start a **new** Claude Code session (hooks load when a session starts) and
 it shows up in Pit Crew.
 
-To keep Pit Crew around, click its menu bar icon → **Launch at Login**.
+> **Known issue:** the **Launch at Login** menu item isn't working reliably yet
+> (the build script can't code-sign the app on some Macs, and macOS may refuse to
+> register an unsigned app). Until it's fixed, add Pit Crew yourself in
+> **System Settings → General → Login Items → +** and pick `/Applications/PitCrew.app`.
 
 ### All commands
 
@@ -140,6 +143,7 @@ Resources/           Info.plist and the app icon
 
 ## Roadmap
 
+- Fix code signing in `build-app.sh` so **Launch at Login** works
 - "Always allow" button (via the hook's `updatedPermissions`)
 - VS Code extension so ↗ focuses the exact terminal tab, not just the window
 - Answering plan approvals (ExitPlanMode) from the panel
