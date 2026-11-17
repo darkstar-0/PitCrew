@@ -82,7 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             forName: NSWindow.didMoveNotification, object: panel, queue: nil
         ) { [weak self] _ in
             guard let self else { return }
+            let moved = self.anchor?.y != self.panel.frame.maxY
             self.anchor = NSPoint(x: self.panel.frame.maxX, y: self.panel.frame.maxY)
+            if moved { self.updateMaxHeight() }
+        }
+
+        // Screens plugged in / unplugged / resolution changed.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.updateMaxHeight()
         }
     }
 
@@ -98,7 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let screen = NSScreen.main?.visibleFrame {
             anchor = NSPoint(x: screen.maxX - 16, y: screen.maxY - 16)
         }
+        updateMaxHeight()
         resize(height: max(panel.frame.height, 60))
+    }
+
+    /// The panel never grows past the bottom of the screen it's on; the list
+    /// scrolls instead.
+    func updateMaxHeight() {
+        let screen = panel.screen ?? NSScreen.main
+        guard let frame = screen?.visibleFrame else { return }
+        let top = anchor?.y ?? frame.maxY
+        store.maxPanelHeight = max(240, top - frame.minY - 16)
     }
 
     @objc func showPanel() {

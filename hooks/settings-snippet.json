@@ -7,6 +7,8 @@
     "Notification":      [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
     "Stop":              [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
     "SessionEnd":        [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "SubagentStart":     [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
+    "SubagentStop":      [{ "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/hook.sh" }] }],
     "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$HOME/.pitcrew/permission.sh", "timeout": 600 }] }]
   }
 }

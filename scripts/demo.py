@@ -9,8 +9,11 @@ events real sessions send. Some scenes wait for you to click in the panel.
     2. ./scripts/demo.py    (or `make demo`)
 
 Options:
-    --fast      shorter pauses (good for a second run)
-    --no-wait   don't wait for clicks; answer prompts automatically
+    --fast        shorter pauses (good for a second run)
+    --no-wait     don't wait for clicks; answer prompts automatically
+    --crowd [N]   stress test: N agents (default 50) across six projects,
+                  with subagents and permission prompts popping up
+    --seconds S   with --crowd --no-wait: how long to run (default 20)
 """
 import json
 import os
@@ -26,6 +29,20 @@ FAST = "--fast" in sys.argv
 AUTO = "--no-wait" in sys.argv
 SPEED = float(os.environ.get("PITCREW_DEMO_SPEED", "0.5" if FAST else "1.0"))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _arg_value(flag, default):
+    """Value after `flag` on the command line, or `default` (None if the flag is absent)."""
+    if flag not in sys.argv:
+        return None
+    i = sys.argv.index(flag)
+    if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+        return sys.argv[i + 1]
+    return default
+
+
+CROWD = _arg_value("--crowd", "50")
+SECONDS = float(_arg_value("--seconds", "20") or 20)
 
 # ── terminal styling ──────────────────────────────────────────────────────────
 TTY = sys.stdout.isatty()
@@ -65,14 +82,15 @@ def post(path, payload, timeout=3.0):
 class FakeAgent:
     """Sends the hook events a real Claude Code session would."""
 
-    def __init__(self, sid, prompt, tasks):
+    def __init__(self, sid, prompt, tasks, cwd=ROOT):
         self.sid = f"pitcrew-demo-{sid}"
         self.prompt = prompt
         self.tasks = tasks           # list of (content, activeForm)
         self.status = ["pending"] * len(tasks)
+        self.cwd = cwd               # the card shows this folder's name
 
     def event(self, name, **fields):
-        payload = {"session_id": self.sid, "hook_event_name": name, "cwd": ROOT}
+        payload = {"session_id": self.sid, "hook_event_name": name, "cwd": self.cwd}
         payload.update(fields)
         post("/event", payload)
 
@@ -124,12 +142,31 @@ class FakeAgent:
         self.tool("Bash", {"command": command, "description": description},
                   {"stdout": output, "stderr": "", "interrupted": False}, seconds)
 
+    # subagents: same session_id as the parent, plus agent_id / agent_type
+    def sub_event(self, name, sub, **fields):
+        agent_id, agent_type = sub
+        self.event(name, agent_id=agent_id, agent_type=agent_type, **fields)
+
+    def sub_start(self, sub):
+        self.sub_event("SubagentStart", sub)
+
+    def sub_stop(self, sub):
+        self.sub_event("SubagentStop", sub, stop_hook_active=False)
+
+    def sub_tool(self, sub, name, tool_input, response=None, seconds=1.0):
+        self.sub_event("PreToolUse", sub, tool_name=name, tool_input=tool_input)
+        pause(seconds)
+        self.sub_event("PostToolUse", sub, tool_name=name, tool_input=tool_input,
+                       tool_response=response if response is not None else {})
+
     # things that wait for you
-    def ask_permission(self, tool_name, tool_input):
+    def ask_permission(self, tool_name, tool_input, sub=None):
         """Blocks until you click. Returns 'allow', 'deny' or None (handed to VS Code)."""
         payload = {"session_id": self.sid, "hook_event_name": "PermissionRequest",
-                   "cwd": ROOT, "tool_name": tool_name, "tool_input": tool_input,
+                   "cwd": self.cwd, "tool_name": tool_name, "tool_input": tool_input,
                    "permission_mode": "default"}
+        if sub:
+            payload["agent_id"], payload["agent_type"] = sub
         body = post("/permission", payload, timeout=600)
         if not body.strip():
             return None
@@ -138,7 +175,7 @@ class FakeAgent:
     def ask_question(self, questions):
         """Blocks until you answer. Returns {question: label} or None."""
         payload = {"session_id": self.sid, "hook_event_name": "PermissionRequest",
-                   "cwd": ROOT, "tool_name": "AskUserQuestion",
+                   "cwd": self.cwd, "tool_name": "AskUserQuestion",
                    "tool_input": {"questions": questions}, "permission_mode": "default"}
         body = post("/permission", payload, timeout=600)
         if not body.strip():
@@ -352,11 +389,63 @@ def main():
     reel.tool("Write", {"file_path": f"{ROOT}/script.md", "content": f"Hook: {pick}"}, seconds=2)
     reel.complete(2)
 
-    # 6 ─ finishing up
-    scene(6, "Agents finish and wait for you",
+    # 6 ─ subagents
+    scene(6, "An agent brings in helpers",
+          "When Claude hands work to subagents, they show up under their parent's card,\n"
+          "each with what it's doing, and each can ask for permission on its own.")
+    reel.begin(3)
+    reel.event("PreToolUse", tool_name="Task",
+               tool_input={"description": "Find b-roll", "subagent_type": "Explore"})
+    clips, stock, reviewer = ("demo-sub-clips", "Explore"), ("demo-sub-stock", "Explore"), \
+        ("demo-sub-review", "script-reviewer")
+    plans = {
+        clips: [("Grep", {"pattern": "b-roll"}), ("Read", {"file_path": f"{ROOT}/clips/index.md"}),
+                ("Glob", {"pattern": "**/*.mp4"}), ("Read", {"file_path": f"{ROOT}/clips/notes.md"})],
+        stock: [("WebSearch", {"query": "stock footage terminal typing"}),
+                ("WebFetch", {"url": "https://example.com/stock", "prompt": "list clips"}),
+                ("WebSearch", {"query": "stock footage race car pit stop"})],
+    }
+
+    def run_sub(sub):
+        reel.sub_start(sub)
+        for name, args in plans[sub]:
+            reel.sub_tool(sub, name, args, seconds=random.uniform(2.0, 3.5))
+        reel.sub_stop(sub)
+
+    helpers = [threading.Thread(target=run_sub, args=(sub,), daemon=True) for sub in (clips, stock)]
+    for t in helpers:
+        t.start()
+        pause(0.5)
+    reel.sub_start(reviewer)
+    reel.sub_tool(reviewer, "Read", {"file_path": f"{ROOT}/script.md"}, seconds=1.5)
+    you("Breakdown reel's script-reviewer subagent wants to run a spell check. Allow or Deny it.\n"
+        "   (Its siblings keep working meanwhile: click the card to watch them.)")
+    decision = wait_for_click(
+        lambda: reel.ask_permission("Bash", {"command": "npx cspell script.md",
+                                             "description": "Spell-check the script"}, sub=reviewer),
+        "allow", "Allow")
+    if decision == "allow":
+        say(LIME("✓ Allowed.") + " Only the reviewer was waiting; the other two never stopped.")
+        reel.sub_tool(reviewer, "Bash", {"command": "npx cspell script.md"},
+                      {"stdout": "CSpell: 1 file checked, 0 issues", "stderr": ""}, seconds=1.5)
+    elif decision == "deny":
+        say(LIME("✓ Denied.") + " The reviewer skips the spell check and carries on.")
+    else:
+        say(LIME("✓ Handed to VS Code."))
+    reel.sub_tool(reviewer, "Edit", {"file_path": f"{ROOT}/script.md"}, seconds=1.5)
+    reel.sub_stop(reviewer)
+    for t in helpers:
+        t.join(timeout=30)
+    reel.event("PostToolUse", tool_name="Task",
+               tool_input={"description": "Find b-roll", "subagent_type": "Explore"},
+               tool_response={"content": "Found 6 clips"})
+    reel.complete(3)
+
+    # 7 ─ finishing up
+    scene(7, "Agents finish and wait for you",
           "When an agent stops, its card says “Done, waiting for you” and plays a sound\n"
           "(the speaker icon mutes it). If it sits idle, it pings you again.")
-    for i in (3, 4):
+    for i in (4,):
         reel.begin(i)
         reel.tool("Edit", {"file_path": f"{ROOT}/script.md"}, seconds=1.2)
         reel.complete(i)
@@ -373,16 +462,138 @@ def main():
     for w in workers:
         w.join(timeout=60 * SPEED + 5)
 
-    # 7 ─ wrap
-    scene(7, "Try the controls",
+    # 8 ─ wrap
+    scene(8, "Try the controls",
           "  🎨  cycle through the color themes (also in the menu bar → Theme)\n"
+          "  ≡   show only agents that need you\n"
           "  ⌃   collapse to the “N agents running” pill (click it to expand)\n"
           "  ↗   jump to that agent's VS Code window\n"
           "  ✕   on a card hides it; ✕ in the header hides the panel (menu bar icon brings it back)\n"
-          "  Drag the header to move the panel. Menu bar → Launch at Login to keep it around.")
+          "  Drag the header to move the panel.\n"
+          "  Want to see a crowd? Run: make crowd  (50 agents)")
     if not AUTO:
         you("Press Enter to clear the demo agents.")
         input()
+
+
+# ── crowd mode: lots of agents at once ───────────────────────────────────────
+CROWD_PROJECTS = ["web-app", "api", "mobile", "infra", "docs", "data-pipeline"]
+CROWD_JOBS = [
+    ("Fix the login redirect", ["Reproduce the bug", "Find the redirect logic", "Write the fix", "Add a test"]),
+    ("Upgrade dependencies", ["Check outdated packages", "Bump versions", "Run the test suite", "Fix breakages"]),
+    ("Add dark mode", ["Audit the colors", "Add theme tokens", "Update components", "Screenshot test"]),
+    ("Speed up the build", ["Profile the build", "Cache dependencies", "Split the bundle"]),
+    ("Write API docs", ["List the endpoints", "Draft examples", "Generate reference", "Proofread"]),
+    ("Flaky test hunt", ["Rerun CI 20 times", "Find the race", "Fix the test"]),
+    ("Migrate to Postgres 17", ["Back up the data", "Run migrations", "Verify row counts", "Update configs"]),
+    ("Refactor auth module", ["Map call sites", "Extract the service", "Move tests", "Clean up"]),
+    ("Triage open issues", ["Read new issues", "Label them", "Close duplicates"]),
+    ("Add rate limiting", ["Pick a strategy", "Write middleware", "Load test"]),
+]
+CROWD_FILES = ["index.ts", "auth.py", "README.md", "schema.sql", "App.swift", "main.go", "config.yaml"]
+CROWD_HELPERS = ["Explore", "Plan", "code-reviewer", "test-runner"]
+
+
+def crowd_tool():
+    name = random.choice(["Read", "Read", "Edit", "Grep", "Bash", "Write", "WebSearch"])
+    f = random.choice(CROWD_FILES)
+    if name == "Bash":
+        cmd = random.choice(["npm test", "pytest -q", "make build", "git status", "go vet ./..."])
+        return name, {"command": cmd}, {"stdout": f"$ {cmd}\nok ({random.randint(3, 90)} passed)", "stderr": ""}
+    if name == "Grep":
+        return name, {"pattern": random.choice(["TODO", "redirect", "token", "retry"])}, {}
+    if name == "WebSearch":
+        return name, {"query": "how to " + random.choice(["cache npm in CI", "fix flaky tests", "rate limit"])}, {}
+    return name, {"file_path": f"/src/{f}"}, {}
+
+
+def crowd_mode(n):
+    global AGENTS
+    preflight()
+    rng_jobs = [random.choice(CROWD_JOBS) for _ in range(n)]
+    AGENTS = [
+        FakeAgent(f"crowd-{i}", title, [(t, t) for t in tasks],
+                  cwd=f"/tmp/pitcrew-crowd/{CROWD_PROJECTS[i % len(CROWD_PROJECTS)]}")
+        for i, (title, tasks) in enumerate(rng_jobs)
+    ]
+    say(BOLD(f"Pit Crew crowd test: {n} agents") + DIM("  ·  Ctrl-C to stop"))
+    say(DIM("Past 8 agents, quiet ones shrink to one-line rows grouped by project, and anything that\n"
+            "needs you jumps to the top as a full card. Try: scroll, the ≡ filter, clicking a row,\n"
+            "the mini robots in a detail view, and the counts on the collapsed ⌃ pill."))
+    for a in AGENTS:
+        a.start()
+        a.plan()
+        time.sleep(0.02)
+
+    lock = threading.Lock()
+    waiting = set()          # agents blocked on a permission prompt
+    helpers = {}             # agent sid -> [sub, steps left]
+    done = set()
+    stop = threading.Event()
+    asked = 0
+
+    def ask(a):
+        verdict = a.ask_permission("Bash", {"command": f"rm -rf ./build && {random.choice(['make', 'npm run build'])}",
+                                            "description": "Clean rebuild"})
+        say(LIME("✓ ") + f"{a.prompt} ({os.path.basename(a.cwd)}): "
+            + {"allow": "allowed", "deny": "denied"}.get(verdict, "handed to VS Code"))
+        with lock:
+            waiting.discard(a.sid)
+
+    def step(a):
+        i = a.next_task
+        if i is None:
+            a.stop()
+            done.add(a.sid)
+            return
+        if a.status[i] == "pending":
+            a.begin(i)
+            return
+        h = helpers.get(a.sid)
+        if h:                                   # a subagent is working
+            sub, left = h
+            if left == 0:
+                a.sub_stop(sub)
+                del helpers[a.sid]
+            else:
+                name, args, resp = crowd_tool()
+                a.sub_tool(sub, name, args, resp, seconds=0)
+                h[1] -= 1
+            return
+        r = random.random()
+        if r < 0.10:
+            sub = (f"{a.sid}-helper-{random.randint(100, 999)}", random.choice(CROWD_HELPERS))
+            a.sub_start(sub)
+            helpers[a.sid] = [sub, random.randint(2, 5)]
+        elif r < 0.75:
+            name, args, resp = crowd_tool()
+            a.tool(name, args, resp, seconds=0)
+        else:
+            a.complete(i)
+
+    if not AUTO:
+        threading.Thread(target=lambda: (input(), stop.set()), daemon=True).start()
+        say(BOLD("Press Enter to stop."))
+    started = time.time()
+    last_ask = started
+    while not stop.is_set() and len(done) < len(AGENTS):
+        if AUTO and time.time() - started > SECONDS:
+            break
+        with lock:
+            busy = waiting | done
+        free = [a for a in AGENTS if a.sid not in busy]
+        if free:
+            step(random.choice(free))
+        # Every few seconds someone needs permission (at most 3 waiting at once).
+        if time.time() - last_ask > 5 * SPEED and len(waiting) < 3 and free:
+            last_ask = time.time()
+            a = random.choice(free)
+            with lock:
+                waiting.add(a.sid)
+            asked += 1
+            threading.Thread(target=ask, args=(a,), daemon=True).start()
+        time.sleep(0.08 * SPEED)
+    say(LIME(f"\n✓ Crowd test over: {len(done)}/{len(AGENTS)} agents finished, {asked} permission prompts."))
 
 
 def cleanup():
@@ -392,9 +603,12 @@ def cleanup():
 
 if __name__ == "__main__":
     try:
-        main()
-        say(LIME("\n✓ Demo done.") + " To use Pit Crew with real agents: " + BOLD("make hooks")
-            + DIM("  (then start a new Claude Code session)"))
+        if CROWD:
+            crowd_mode(max(1, int(CROWD)))
+        else:
+            main()
+            say(LIME("\n✓ Demo done.") + " To use Pit Crew with real agents: " + BOLD("make hooks")
+                + DIM("  (then start a new Claude Code session)"))
     except KeyboardInterrupt:
         say("\nStopping the demo…")
     finally:
