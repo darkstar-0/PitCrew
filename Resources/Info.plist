@@ -23,6 +23,8 @@
     <!-- Menu bar app: no Dock icon, no app switcher entry -->
     <key>LSUIElement</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Jack Faulkner. MIT License.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

@@ -131,3 +131,7 @@ Resources/           Info.plist and the app icon
 - "Always allow" button (via the hook's `updatedPermissions`)
 - VS Code extension so ↗ focuses the exact terminal tab, not just the window
 - Answering plan approvals (ExitPlanMode) from the panel
+
+## License
+
+[MIT](LICENSE) © 2026 Jack Faulkner
