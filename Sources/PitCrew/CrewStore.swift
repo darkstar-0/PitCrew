@@ -8,6 +8,14 @@ struct TaskItem: Identifiable {
     var status: String   // pending | in_progress | completed
 }
 
+/// One tool call in the detail view's activity list.
+struct ActivityItem: Identifiable {
+    let id = UUID()
+    let symbol: String   // SF Symbol for the tool kind
+    let text: String
+    var done = false
+}
+
 struct CrewOption {
     let label: String
     let detail: String
@@ -46,6 +54,12 @@ struct Agent: Identifiable {
     var finished = false
     var dismissed = false
 
+    // Detail view
+    var recent: [ActivityItem] = []   // last few tool calls, oldest first
+    var lastCommand: String?          // last Bash command
+    var lastOutput = ""               // tail of its output
+    var commandRunning = false
+
     var folder: String { (cwd as NSString).lastPathComponent }
     var done: Int { tasks.filter { $0.status == "completed" }.count }
     var fraction: Double { tasks.isEmpty ? 0 : Double(done) / Double(tasks.count) }
@@ -75,6 +89,13 @@ final class CrewStore: ObservableObject {
     @Published private(set) var agents: [Agent] = []
     @Published var collapsed = false
     @Published var soundOn = true
+    /// Which agent's detail view is open (nil = the list).
+    @Published var selectedID: String?
+
+    var selectedAgent: Agent? {
+        guard let id = selectedID else { return nil }
+        return visibleAgents.first { $0.id == id }
+    }
 
     /// Set by the app delegate. If the panel is hidden, permission prompts
     /// fall straight through to the terminal.
@@ -153,10 +174,27 @@ final class CrewStore: ObservableObject {
             a.attention = nil
             a.finished = false
             a.activity = Self.describe(tool: tool, input: input)
+            if !Self.taskTools.contains(tool) {
+                // Tools run one after another, so anything older is finished
+                // (or was denied and will never get a PostToolUse).
+                for i in a.recent.indices { a.recent[i].done = true }
+                a.recent.append(ActivityItem(symbol: Self.symbol(for: tool), text: a.activity))
+                if a.recent.count > 8 { a.recent.removeFirst(a.recent.count - 8) }
+            }
+            if tool == "Bash" {
+                a.lastCommand = input["command"] as? String ?? ""
+                a.lastOutput = ""
+                a.commandRunning = true
+            }
 
         case "PostToolUse":
             a.attention = nil
             applyTasks(&a, tool: tool, input: input, response: e["tool_response"])
+            if let i = a.recent.lastIndex(where: { !$0.done }) { a.recent[i].done = true }
+            if tool == "Bash" {
+                a.commandRunning = false
+                a.lastOutput = Self.tail(Self.bashOutput(e["tool_response"]), lines: 6)
+            }
 
         case "Notification":
             // Fires when the terminal is showing a prompt, or Claude is idle waiting.
@@ -170,6 +208,8 @@ final class CrewStore: ObservableObject {
         case "Stop":
             a.finished = true
             a.attention = nil
+            a.commandRunning = false
+            for i in a.recent.indices { a.recent[i].done = true }
             ding()
 
         default:
@@ -401,6 +441,36 @@ final class CrewStore: ObservableObject {
             }
             return "Using \(tool)"
         }
+    }
+
+    static let taskTools: Set<String> = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]
+
+    static func symbol(for tool: String) -> String {
+        switch tool {
+        case "Bash": return "apple.terminal"
+        case "Read": return "doc.text"
+        case "Edit", "MultiEdit", "Write", "NotebookEdit": return "pencil"
+        case "Grep", "Glob": return "magnifyingglass"
+        case "WebSearch", "WebFetch": return "globe"
+        case "Task", "Agent": return "person.2"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    /// Bash tool_response is usually {"stdout": …, "stderr": …}; fall back to text.
+    static func bashOutput(_ response: Any?) -> String {
+        if let d = response as? [String: Any] {
+            let out = d["stdout"] as? String ?? ""
+            let err = d["stderr"] as? String ?? ""
+            return [out, err].filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+        return stringify(response)
+    }
+
+    static func tail(_ s: String, lines n: Int) -> String {
+        let lines = s.split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.count > 90 ? String($0.prefix(89)) + "…" : String($0) }
+        return lines.suffix(n).joined(separator: "\n")
     }
 
     static func shorten(_ s: String, _ n: Int) -> String {

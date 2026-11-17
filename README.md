@@ -69,6 +69,9 @@ Then start **new** Claude Code sessions (hooks load at session start).
 ## Controls
 
 - Drag the header to move the panel. It stays pinned by its top-right corner.
+- Click a card to open its **detail view**: the full checklist (or recent tool
+  calls if the agent made no task list) and the last terminal command with its
+  output. The mini robots at the top switch agents; `‹` goes back.
 - `⌃` collapses to the "N agents running" pill. Click the pill to expand.
 - `↗` brings that project's VS Code window to the front.
 - `✕` on a card hides it until that agent's next prompt or notification.
@@ -78,5 +81,5 @@ Then start **new** Claude Code sessions (hooks load at session start).
 
 - ~~**v1:** Allow/Deny from the panel via the `PermissionRequest` hook.~~ Done.
 - **Next:** launch at login; "Always allow" (via `updatedPermissions`).
-- **v2:** Detail view with the full checklist and the last Bash command; answering
-  `AskUserQuestion` from the panel; a VS Code extension for exact terminal-tab focus.
+- ~~Detail view; answering `AskUserQuestion` from the panel.~~ Done.
+- **Later:** a VS Code extension for exact terminal-tab focus.
