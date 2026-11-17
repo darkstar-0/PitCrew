@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ServiceManagement
 
 /// Borderless panels can't become key by default, which makes SwiftUI buttons flaky.
 /// With .nonactivatingPanel it can take clicks without stealing focus from VS Code.
@@ -8,7 +9,7 @@ final class CrewPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let width: CGFloat = 360
     static let port: UInt16 = 7777
 
@@ -16,11 +17,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var panel: CrewPanel!
     var statusItem: NSStatusItem!
     var server: EventServer?
+    var loginItem: NSMenuItem!
 
     /// Top-right corner the panel stays pinned to as it grows/shrinks.
     var anchor: NSPoint?
 
+    /// True when running from PitCrew.app (vs. `swift run`). Launch at Login
+    /// only works for a real app bundle.
+    var isAppBundle: Bool { Bundle.main.bundleURL.pathExtension == "app" }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Only one copy can own the port; if PitCrew.app is already running, bow out.
+        if let id = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: id).count > 1 {
+            NSApp.terminate(nil)
+            return
+        }
+
         setupPanel()
         setupStatusItem()
         store.isPanelVisible = { [weak self] in self?.panel.isVisible ?? false }
@@ -92,6 +105,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
     }
 
+    // MARK: Launch at Login
+
+    @objc func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            NSLog("Pit Crew: Launch at Login failed: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Launch at Login"
+            alert.informativeText = "\(error.localizedDescription)\n\nYou can also add Pit Crew in System Settings → General → Login Items."
+            alert.runModal()
+        }
+        refreshLoginItem()
+    }
+
+    func refreshLoginItem() {
+        guard let loginItem else { return }
+        if isAppBundle {
+            loginItem.isEnabled = true
+            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            loginItem.title = "Launch at Login"
+        } else {
+            loginItem.isEnabled = false
+            loginItem.state = .off
+            loginItem.title = "Launch at Login (needs PitCrew.app)"
+        }
+    }
+
+    // MARK: Themes
+
+    var themeMenu: NSMenu!
+
+    func buildThemeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        let auto = menu.addItem(withTitle: "Auto (match macOS)", action: #selector(selectTheme(_:)), keyEquivalent: "")
+        auto.target = self
+        auto.representedObject = Theme.autoID
+        menu.addItem(.separator())
+        for theme in Theme.all {
+            let item = menu.addItem(withTitle: theme.name, action: #selector(selectTheme(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = theme.id
+        }
+        return menu
+    }
+
+    @objc func selectTheme(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { store.themeID = id }
+    }
+
+    func refreshThemeMenu() {
+        for item in themeMenu?.items ?? [] {
+            item.state = (item.representedObject as? String) == store.themeID ? .on : .off
+        }
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshLoginItem()
+        refreshThemeMenu()
+    }
+
     // MARK: Menu bar
 
     func setupStatusItem() {
@@ -99,10 +179,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = NSImage(systemSymbolName: "person.3.fill",
                                            accessibilityDescription: "Pit Crew")
         let menu = NSMenu()
+        menu.delegate = self
+        menu.autoenablesItems = false
         menu.addItem(withTitle: "Show Pit Crew", action: #selector(showPanel), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reset Position", action: #selector(resetPosition), keyEquivalent: "").target = self
+        themeMenu = buildThemeMenu()
+        let themeItem = menu.addItem(withTitle: "Theme", action: nil, keyEquivalent: "")
+        themeItem.submenu = themeMenu
+        menu.addItem(.separator())
+        loginItem = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        loginItem.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Pit Crew", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
+        refreshLoginItem()
     }
 }

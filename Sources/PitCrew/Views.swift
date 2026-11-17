@@ -1,13 +1,6 @@
 import SwiftUI
 import AppKit
 
-extension Color {
-    static let lime = Color(red: 0.84, green: 0.97, blue: 0.36)
-    static let crewCard = Color(white: 0.16)
-    static let crewBG = Color(white: 0.10)
-    static let crewMuted = Color(white: 0.62)
-}
-
 let robotPalette: [Color] = [
     Color(red: 0.33, green: 0.52, blue: 0.96),  // blue
     Color(red: 0.93, green: 0.42, blue: 0.66),  // pink
@@ -30,10 +23,20 @@ struct CrewView: View {
     @ObservedObject var store: CrewStore
     var onHeight: (CGFloat) -> Void
     var onHide: () -> Void
+    @Environment(\.colorScheme) var colorScheme
+
+    /// The active theme ("Auto" follows macOS light/dark mode).
+    private var theme: Theme { Theme.resolve(store.themeID, colorScheme: colorScheme) }
 
     var body: some View {
         Group {
-            if store.collapsed { pill } else { panel }
+            if store.collapsed {
+                pill
+            } else if let agent = store.selectedAgent {
+                DetailView(agent: agent, store: store, onHide: onHide)
+            } else {
+                panel
+            }
         }
         .frame(width: AppDelegate.width)
         .fixedSize(horizontal: false, vertical: true)
@@ -41,6 +44,7 @@ struct CrewView: View {
             Color.clear.preference(key: HeightKey.self, value: g.size.height)
         })
         .onPreferenceChange(HeightKey.self, perform: onHeight)
+        .environment(\.theme, theme)
     }
 
     private var countText: String {
@@ -53,14 +57,15 @@ struct CrewView: View {
             Spacer()
             Button { store.collapsed = false } label: {
                 HStack(spacing: 8) {
-                    Circle().fill(Color.black).frame(width: 7, height: 7)
+                    Circle().fill(theme.onAccent).frame(width: 7, height: 7)
                     Text(store.needsAttention ? "Agent needs you" : countText)
                         .font(.system(size: 13, weight: .bold))
                 }
-                .foregroundColor(.black)
+                .foregroundColor(theme.onAccent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(Capsule().fill(Color.lime))
+                .background(Capsule().fill(theme.accent))
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
             }
             .buttonStyle(.plain)
         }
@@ -72,7 +77,7 @@ struct CrewView: View {
             if store.visibleAgents.isEmpty {
                 Text("No agents running")
                     .font(.system(size: 12))
-                    .foregroundColor(Color.pitcrewMuted)
+                    .foregroundColor(theme.secondary)
                     .padding(.vertical, 14)
             }
             ForEach(store.visibleAgents) { agent in
@@ -80,16 +85,18 @@ struct CrewView: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 18).fill(Color.pitcrewBG.opacity(0.97)))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 18).fill(theme.panel.opacity(0.97)))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(theme.text.opacity(0.08), lineWidth: 1))
     }
 
     var header: some View {
         HStack(spacing: 8) {
-            Circle().fill(Color.lime).frame(width: 7, height: 7)
-            Text("Pit Crew").font(.system(size: 14, weight: .bold)).foregroundColor(.white)
-            Text("\(store.visibleAgents.count)").font(.system(size: 14, weight: .bold)).foregroundColor(Color.pitcrewMuted)
+            Circle().fill(theme.accentInk).frame(width: 7, height: 7)
+            Text("Pit Crew").font(.system(size: 14, weight: .bold)).foregroundColor(theme.text)
+            Text("\(store.visibleAgents.count)").font(.system(size: 14, weight: .bold)).foregroundColor(theme.secondary)
             Spacer()
+            IconButton(symbol: "paintpalette") { store.cycleTheme() }
+                .help("Theme: \(theme.name). Click for the next one.")
             IconButton(symbol: store.soundOn ? "speaker.wave.2" : "speaker.slash") { store.soundOn.toggle() }
             IconButton(symbol: "chevron.up") { store.collapsed = true }
             IconButton(symbol: "xmark") { onHide() }
@@ -105,44 +112,19 @@ struct CrewView: View {
 struct AgentCard: View {
     let agent: Agent
     @ObservedObject var store: CrewStore
+    @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             summaryRow
-            if let p = agent.permission {
-                if p.questions.isEmpty {
-                    permissionBox(p)
-                } else {
-                    QuestionBox(
-                        questions: p.questions,
-                        onSend: { store.answer(agent, $0) },
-                        onTerminal: { store.decide(agent, .terminal) }
-                    )
-                    .id(p.id)   // fresh selections for each new question
-                }
-            }
+                .contentShape(Rectangle())
+                .onTapGesture { store.selectedID = agent.id }   // open detail view
+            ActionBox(agent: agent, store: store)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.pitcrewCard))
+        .background(RoundedRectangle(cornerRadius: 12).fill(theme.card))
         .overlay(RoundedRectangle(cornerRadius: 12)
-            .stroke(Color.lime, lineWidth: agent.highlight == nil ? 0 : 2))
-    }
-
-    private func permissionBox(_ p: PendingPermission) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(p.summary)
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundColor(.white)
-                .lineLimit(3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 6) {
-                PillButton(title: "Allow", primary: true) { store.decide(agent, .allow) }
-                PillButton(title: "Deny") { store.decide(agent, .deny) }
-                PillButton(title: "In VS Code") { store.decide(agent, .terminal) }
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+            .stroke(theme.accentInk, lineWidth: agent.highlight == nil ? 0 : 2))
     }
 
     private var summaryRow: some View {
@@ -154,18 +136,18 @@ struct AgentCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(agent.title)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(theme.text)
                     .lineLimit(1)
 
                 Text(agent.highlight ?? agent.statusLine)
                     .font(.system(size: 11.5, weight: agent.highlight == nil ? .regular : .semibold))
-                    .foregroundColor(agent.highlight == nil ? Color.pitcrewMuted : Color.lime)
+                    .foregroundColor(agent.highlight == nil ? theme.secondary : theme.accentInk)
                     .lineLimit(1)
 
                 if !agent.tasks.isEmpty {
                     HStack(spacing: 4) {
-                        Text("\(agent.done)/\(agent.tasks.count)").foregroundColor(Color.lime)
-                        Text(agent.progressLabel).foregroundColor(Color(white: 0.8)).lineLimit(1)
+                        Text("\(agent.done)/\(agent.tasks.count)").foregroundColor(theme.accentInk)
+                        Text(agent.progressLabel).foregroundColor(theme.text.opacity(0.8)).lineLimit(1)
                     }
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.top, 2)
@@ -175,7 +157,7 @@ struct AgentCard: View {
 
                 Text(agent.folder)
                     .font(.system(size: 9.5))
-                    .foregroundColor(Color(white: 0.4))
+                    .foregroundColor(theme.tertiary)
                     .padding(.top, 1)
             }
 
@@ -189,9 +171,295 @@ struct AgentCard: View {
     }
 }
 
+// MARK: Pending permission / question (shared by card and detail view)
+
+struct ActionBox: View {
+    let agent: Agent
+    @ObservedObject var store: CrewStore
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if let p = agent.permission {
+            if p.questions.isEmpty {
+                permissionBox(p)
+            } else {
+                QuestionBox(
+                    questions: p.questions,
+                    onSend: { store.answer(agent, $0) },
+                    onTerminal: { store.decide(agent, .terminal) }
+                )
+                .id(p.id)   // fresh selections for each new question
+            }
+        }
+    }
+
+    private func permissionBox(_ p: PendingPermission) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(p.summary)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(theme.text)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                PillButton(title: "Allow", primary: true) { store.decide(agent, .allow) }
+                PillButton(title: "Deny") { store.decide(agent, .deny) }
+                PillButton(title: "In VS Code") { store.decide(agent, .terminal) }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.text.opacity(0.06)))
+    }
+}
+
+// MARK: Detail view
+
+struct DetailView: View {
+    let agent: Agent
+    @ObservedObject var store: CrewStore
+    @Environment(\.theme) private var theme
+    var onHide: () -> Void
+
+    private var color: Color { robotPalette[agent.colorIndex % robotPalette.count] }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            header
+            VStack(alignment: .leading, spacing: 12) {
+                summary
+                Rectangle().fill(theme.text.opacity(0.08)).frame(height: 1)
+                checklist
+                ActionBox(agent: agent, store: store)
+                if let cmd = agent.lastCommand {
+                    TerminalBox(command: cmd, output: agent.lastOutput, running: agent.commandRunning)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12).fill(theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .stroke(theme.accentInk, lineWidth: agent.highlight == nil ? 0 : 2))
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 18).fill(theme.panel.opacity(0.97)))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(theme.text.opacity(0.08), lineWidth: 1))
+    }
+
+    /// Back button, a mini robot per agent to hop between them, window controls.
+    private var header: some View {
+        HStack(spacing: 6) {
+            IconButton(symbol: "chevron.left") { store.selectedID = nil }
+            ForEach(store.visibleAgents) { a in
+                Button { store.selectedID = a.id } label: {
+                    MiniBot(color: robotPalette[a.colorIndex % robotPalette.count],
+                            selected: a.id == agent.id,
+                            alert: a.highlight != nil)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            IconButton(symbol: "arrow.up.forward.square") { store.focus(agent) }
+            IconButton(symbol: store.soundOn ? "speaker.wave.2" : "speaker.slash") { store.soundOn.toggle() }
+            IconButton(symbol: "chevron.up") { store.collapsed = true }
+            IconButton(symbol: "xmark") { onHide() }
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 2)
+        .background(WindowDragArea())
+    }
+
+    private var summary: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Robot(color: color, working: !agent.finished && agent.highlight == nil)
+                .scaleEffect(1.25)
+                .padding(.horizontal, 4)
+                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(agent.title)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(theme.text)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(agent.highlight ?? agent.statusLine)
+                    .font(.system(size: 12, weight: agent.highlight == nil ? .regular : .semibold))
+                    .foregroundColor(agent.highlight == nil ? theme.secondary : theme.accentInk)
+                    .lineLimit(1)
+                if !agent.tasks.isEmpty {
+                    HStack(spacing: 4) {
+                        Text("\(agent.done)/\(agent.tasks.count)").foregroundColor(theme.accentInk)
+                        Text(agent.progressLabel).foregroundColor(theme.text.opacity(0.8)).lineLimit(1)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.top, 2)
+                    ProgressBar(fraction: agent.fraction)
+                }
+                Text(agent.folder)
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.tertiary)
+                    .padding(.top, 1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The agent's task list if it made one, otherwise its recent tool calls.
+    @ViewBuilder private var checklist: some View {
+        if !agent.tasks.isEmpty {
+            let shown = Array(agent.tasks.prefix(10))
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(shown) { t in
+                    ChecklistRow(state: t.status == "completed" ? .done
+                                      : t.status == "in_progress" ? .active : .pending,
+                                 symbol: nil,
+                                 text: t.content)
+                }
+                if agent.tasks.count > shown.count {
+                    Text("+\(agent.tasks.count - shown.count) more")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.secondary)
+                        .padding(.leading, 26)
+                }
+            }
+        } else if !agent.recent.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("RECENT ACTIVITY")
+                    .font(.system(size: 9.5, weight: .heavy))
+                    .foregroundColor(theme.secondary)
+                ForEach(agent.recent) { item in
+                    ChecklistRow(state: item.done ? .done : .active,
+                                 symbol: item.symbol,
+                                 text: item.text)
+                }
+            }
+        } else {
+            Text("Nothing to show yet")
+                .font(.system(size: 12))
+                .foregroundColor(theme.secondary)
+        }
+    }
+}
+
+struct ChecklistRow: View {
+    @Environment(\.theme) private var theme
+    enum RowState { case done, active, pending }
+    let state: RowState
+    let symbol: String?
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                switch state {
+                case .done:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(theme.secondary)
+                case .active:
+                    Spinner()
+                case .pending:
+                    Image(systemName: "circle")
+                        .foregroundColor(theme.tertiary)
+                }
+            }
+            .font(.system(size: 14))
+            .frame(width: 16, height: 16)
+
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.secondary)
+                    .frame(width: 14)
+            }
+
+            Text(text)
+                .font(.system(size: 12.5, weight: state == .active ? .semibold : .regular))
+                .foregroundColor(state == .active ? theme.text
+                                 : state == .done ? theme.secondary : theme.tertiary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Clock-driven spinner (no repeatForever, so nothing leaks into layout).
+struct Spinner: View {
+    @Environment(\.theme) private var theme
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(theme.text, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 13, height: 13)
+                .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1) * 360))
+        }
+    }
+}
+
+struct TerminalBox: View {
+    @Environment(\.theme) private var theme
+    let command: String
+    let output: String
+    let running: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "apple.terminal").font(.system(size: 10))
+                Text("Terminal").font(.system(size: 11, weight: .semibold, design: .monospaced))
+            }
+            .foregroundColor(theme.terminalText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+
+            Text("$ " + CrewStore.shorten(command, 160))
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundColor(theme.terminalInk)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if running {
+                Text("running…")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.terminalText.opacity(0.6))
+            } else if !output.isEmpty {
+                Text(output)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(theme.terminalText)
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.terminal))
+    }
+}
+
+/// Tiny robot head for switching agents in the detail header.
+struct MiniBot: View {
+    @Environment(\.theme) private var theme
+    let color: Color
+    let selected: Bool
+    let alert: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 5).fill(color).frame(width: 26, height: 18)
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 1).fill(Color.black.opacity(0.8)).frame(width: 3, height: 5)
+                RoundedRectangle(cornerRadius: 1).fill(Color.black.opacity(0.8)).frame(width: 3, height: 5)
+            }
+        }
+        .padding(2)
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .stroke(alert ? theme.accentInk : theme.text.opacity(selected ? 0.9 : 0), lineWidth: 1.5))
+        .opacity(selected || alert ? 1 : 0.55)
+    }
+}
+
 // MARK: Questions (AskUserQuestion)
 
 struct QuestionBox: View {
+    @Environment(\.theme) private var theme
     let questions: [CrewQuestion]
     let onSend: ([String: String]) -> Void
     let onTerminal: () -> Void
@@ -231,7 +499,7 @@ struct QuestionBox: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.text.opacity(0.06)))
     }
 
     private func questionView(_ i: Int) -> some View {
@@ -240,14 +508,14 @@ struct QuestionBox: View {
             if !q.header.isEmpty {
                 Text(q.header.uppercased())
                     .font(.system(size: 9.5, weight: .heavy))
-                    .foregroundColor(.black)
+                    .foregroundColor(theme.onAccent)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.lime))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.accent))
             }
             Text(q.text)
                 .font(.system(size: 13, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(theme.text)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(q.options.indices, id: \.self) { j in
                 let option = q.options[j]
@@ -273,6 +541,7 @@ struct QuestionBox: View {
 }
 
 struct OptionRow: View {
+    @Environment(\.theme) private var theme
     let label: String
     let detail: String
     let selected: Bool
@@ -289,16 +558,16 @@ struct OptionRow: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: symbol)
                     .font(.system(size: 12))
-                    .foregroundColor(selected ? Color.lime : Color.pitcrewMuted)
+                    .foregroundColor(selected ? theme.accentInk : theme.secondary)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
                         .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundColor(theme.text)
                     if !detail.isEmpty {
                         Text(detail)
                             .font(.system(size: 10.5))
-                            .foregroundColor(Color.pitcrewMuted)
+                            .foregroundColor(theme.secondary)
                             .lineLimit(2)
                     }
                 }
@@ -307,9 +576,9 @@ struct OptionRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 8)
-                .fill(selected ? Color.lime.opacity(0.12) : Color.white.opacity(0.06)))
+                .fill(selected ? theme.accent.opacity(theme.isLight ? 0.22 : 0.12) : theme.text.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(selected ? Color.lime.opacity(0.7) : Color.clear, lineWidth: 1))
+                .stroke(selected ? theme.accentInk.opacity(0.7) : Color.clear, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -317,6 +586,7 @@ struct OptionRow: View {
 }
 
 struct PillButton: View {
+    @Environment(\.theme) private var theme
     let title: String
     var primary = false
     let action: () -> Void
@@ -325,10 +595,10 @@ struct PillButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundColor(primary ? .black : .white)
+                .foregroundColor(primary ? theme.onAccent : theme.text)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                .background(Capsule().fill(primary ? Color.lime : Color.white.opacity(0.12)))
+                .background(Capsule().fill(primary ? theme.accent : theme.text.opacity(0.10)))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -336,12 +606,13 @@ struct PillButton: View {
 }
 
 struct ProgressBar: View {
+    @Environment(\.theme) private var theme
     let fraction: Double
     var body: some View {
         GeometryReader { g in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.12))
-                Capsule().fill(Color.lime)
+                Capsule().fill(theme.text.opacity(0.12))
+                Capsule().fill(theme.accent)
                     .frame(width: max(4, g.size.width * fraction))
                     .animation(.easeOut(duration: 0.4), value: fraction)
             }
@@ -397,13 +668,14 @@ struct Robot: View {
 // MARK: Small pieces
 
 struct IconButton: View {
+    @Environment(\.theme) private var theme
     let symbol: String
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Color(white: 0.85))
+                .foregroundColor(theme.text.opacity(0.8))
                 .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
