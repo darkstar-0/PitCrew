@@ -9,6 +9,10 @@
   See what every session is doing, and approve or answer them without switching windows.
 </p>
 
+<p align="center">
+  <img src="assets/pitcrew_1.png" width="420" alt="Pit Crew showing four agents, one asking permission to run a command">
+</p>
+
 ---
 
 Running several Claude Code agents in VS Code tabs means constantly checking which one is
@@ -29,6 +33,26 @@ desktop, and shows:
   with anything that needs you pinned to the top
 
 Everything runs locally. Pit Crew only listens on `127.0.0.1`.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="assets/pitcrew_2.png" alt="Answering a multiple-choice question from the card"><br><sub><b>Answer Claude's questions</b><br>pick an option and hit Send</sub></td>
+    <td align="center" width="33%"><img src="assets/pitcrew_3.png" alt="Three subagents under their parent, one asking for permission"><br><sub><b>Subagents</b><br>each with its own status and prompts</sub></td>
+    <td align="center" width="33%"><img src="assets/pitcrew_4.png" alt="Detail view with checklist and terminal output"><br><sub><b>Detail view</b><br>checklist + last terminal command</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/pitcrew_5.png" alt="50 agents in compact rows grouped by project"><br><sub><b>50 agents</b><br>compact rows, grouped by project</sub></td>
+    <td align="center"><img src="assets/pitcrew_6.png" alt="Crowd with three agents needing permission pinned to the top"><br><sub><b>Needs-you first</b><br>prompts stay pinned at the top</sub></td>
+    <td align="center"><img src="assets/pitcrew_7.png" alt="Close-up of compact rows with progress and subagent counts"><br><sub><b>Compact rows</b><br>progress and subagent counts at a glance</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="assets/pit-crew-themes.png" alt="The six color themes: Pit Lane, Daylight, Midnight, Rosso, Papaya, Powder Blue"><br>
+  <sub><b>Six themes</b> plus Auto, which follows macOS light/dark mode</sub>
+</p>
 
 ## Quick start
 
@@ -168,13 +192,17 @@ scripts/             build-app.sh, install-hooks.sh, demo.py, uninstall.sh
 Resources/           Info.plist and the app icon
 ```
 
-## Roadmap
+## To-Do
 
-- Fix code signing in `build-app.sh` so **Launch at Login** works
-- "Always allow" button (via the hook's `updatedPermissions`)
-- VS Code extension so ↗ focuses the exact terminal tab, not just the window
-- Answering plan approvals (ExitPlanMode) from the panel
-- Linking separate `claude -p` sessions back to the agent that started them
+- [ ] **Fix Launch at Login**: code signing in `build-app.sh` fails on some Macs, and
+      macOS may refuse to register an unsigned app. First step: run
+      `codesign --force --sign - build/PitCrew.app` and look at the error.
+- [ ] **"Always allow" button**: stop Claude asking about the same command again
+      (via the hook's `updatedPermissions`)
+- [ ] **Jump to the exact terminal tab**: a small VS Code extension so ↗ focuses the
+      agent's terminal tab, not just its window
+- [ ] **Answer plan approvals** (ExitPlanMode) from the panel
+- [ ] **Link `claude -p` sessions** back to the agent that started them
 
 ## License
 
