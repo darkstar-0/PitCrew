@@ -8,7 +8,48 @@ let robotPalette: [Color] = [
     Color(red: 0.58, green: 0.45, blue: 0.95),  // purple
     Color(red: 0.30, green: 0.75, blue: 0.70),  // teal
     Color(red: 0.55, green: 0.80, blue: 0.35),  // green
+    Color(red: 0.95, green: 0.36, blue: 0.36),  // red
+    Color(red: 0.95, green: 0.82, blue: 0.30),  // yellow
+    Color(red: 0.40, green: 0.72, blue: 0.98),  // sky
+    Color(red: 0.80, green: 0.50, blue: 0.95),  // violet
+    Color(red: 0.98, green: 0.58, blue: 0.47),  // coral
+    Color(red: 0.62, green: 0.64, blue: 0.70),  // slate
 ]
+
+/// Each agent's robot: 12 colors × 3 head shapes before anything repeats.
+func robotColor(_ index: Int) -> Color { robotPalette[index % robotPalette.count] }
+func robotVariant(_ index: Int) -> Int { (index / robotPalette.count) % 3 }
+
+/// A group of quiet agents in the same project folder (crowded mode).
+struct AgentGroup: Identifiable {
+    let id: String       // folder name
+    let agents: [Agent]
+}
+
+struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Grows with its content up to `maxHeight`, then scrolls.
+struct CappedScroll<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: Content
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: contentHeight > maxHeight) {
+            content
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                })
+        }
+        .frame(height: min(max(contentHeight, 1), maxHeight))
+        .onPreferenceChange(ContentHeightKey.self) { contentHeight = $0 }
+    }
+}
 
 struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -49,6 +90,8 @@ struct CrewView: View {
 
     private var countText: String {
         let n = store.visibleAgents.count
+        let k = store.needsYouCount
+        if k > 0 { return "\(n) agent\(n == 1 ? "" : "s") · \(k) need\(k == 1 ? "s" : "") you" }
         return "\(n) agent\(n == 1 ? "" : "s") running"
     }
 
@@ -58,7 +101,7 @@ struct CrewView: View {
             Button { store.collapsed = false } label: {
                 HStack(spacing: 8) {
                     Circle().fill(theme.onAccent).frame(width: 7, height: 7)
-                    Text(store.needsAttention ? "Agent needs you" : countText)
+                    Text(countText)
                         .font(.system(size: 13, weight: .bold))
                 }
                 .foregroundColor(theme.onAccent)
@@ -74,14 +117,8 @@ struct CrewView: View {
     var panel: some View {
         VStack(spacing: 8) {
             header
-            if store.visibleAgents.isEmpty {
-                Text("No agents running")
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.secondary)
-                    .padding(.vertical, 14)
-            }
-            ForEach(store.visibleAgents) { agent in
-                AgentCard(agent: agent, store: store)
+            CappedScroll(maxHeight: max(160, store.maxPanelHeight - 56)) {
+                VStack(spacing: 8) { list }
             }
         }
         .padding(10)
@@ -89,12 +126,71 @@ struct CrewView: View {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(theme.text.opacity(0.08), lineWidth: 1))
     }
 
+    /// Few agents: a full card each. A crowd: agents that need you keep full
+    /// cards at the top; everyone else shrinks to a one-line row, grouped by project.
+    @ViewBuilder var list: some View {
+        let agents = store.sortedAgents
+        if store.visibleAgents.isEmpty {
+            emptyText("No agents running")
+        } else if agents.isEmpty {
+            emptyText("Nobody needs you right now")
+        } else if !store.isCrowded {
+            ForEach(agents) { agent in
+                AgentCard(agent: agent, store: store)
+            }
+        } else {
+            ForEach(agents.filter { $0.highlight != nil }) { agent in
+                AgentCard(agent: agent, store: store)
+            }
+            ForEach(Self.groups(agents.filter { $0.highlight == nil })) { group in
+                VStack(spacing: 4) {
+                    SectionHeader(title: group.id, count: group.agents.count)
+                    ForEach(group.agents) { agent in
+                        CompactRow(agent: agent, store: store)
+                    }
+                }
+            }
+        }
+    }
+
+    private func emptyText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundColor(theme.secondary)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+    }
+
+    /// Groups agents by project folder, keeping the order folders first appeared in.
+    static func groups(_ agents: [Agent]) -> [AgentGroup] {
+        var order: [String] = []
+        var byFolder: [String: [Agent]] = [:]
+        for a in agents {
+            let key = a.folder.isEmpty ? "Other" : a.folder
+            if byFolder[key] == nil { order.append(key) }
+            byFolder[key, default: []].append(a)
+        }
+        return order.map { AgentGroup(id: $0, agents: byFolder[$0] ?? []) }
+    }
+
     var header: some View {
         HStack(spacing: 8) {
             Circle().fill(theme.accentInk).frame(width: 7, height: 7)
             Text("Pit Crew").font(.system(size: 14, weight: .bold)).foregroundColor(theme.text)
+                .fixedSize()
             Text("\(store.visibleAgents.count)").font(.system(size: 14, weight: .bold)).foregroundColor(theme.secondary)
-            Spacer()
+            if store.needsYouCount > 0 {
+                Text("· \(store.needsYouCount) need\(store.needsYouCount == 1 ? "s" : "") you")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.accentInk)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            IconButton(symbol: store.onlyNeedsYou ? "line.3.horizontal.decrease.circle.fill"
+                                                  : "line.3.horizontal.decrease.circle") {
+                store.onlyNeedsYou.toggle()
+            }
+            .help(store.onlyNeedsYou ? "Showing only agents that need you" : "Show only agents that need you")
             IconButton(symbol: "paintpalette") { store.cycleTheme() }
                 .help("Theme: \(theme.name). Click for the next one.")
             IconButton(symbol: store.soundOn ? "speaker.wave.2" : "speaker.slash") { store.soundOn.toggle() }
@@ -129,8 +225,9 @@ struct AgentCard: View {
 
     private var summaryRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            Robot(color: robotPalette[agent.colorIndex % robotPalette.count],
-                  working: !agent.finished && agent.highlight == nil)
+            Robot(color: robotColor(agent.colorIndex),
+                  working: !agent.finished && agent.highlight == nil,
+                  variant: robotVariant(agent.colorIndex))
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -153,6 +250,11 @@ struct AgentCard: View {
                     .padding(.top, 2)
 
                     ProgressBar(fraction: agent.fraction)
+                }
+
+                if !agent.subagents.isEmpty {
+                    SubagentList(subagents: agent.subagents, limit: 3)
+                        .padding(.top, 3)
                 }
 
                 Text(agent.folder)
@@ -219,24 +321,35 @@ struct DetailView: View {
     @Environment(\.theme) private var theme
     var onHide: () -> Void
 
-    private var color: Color { robotPalette[agent.colorIndex % robotPalette.count] }
+    private var color: Color { robotColor(agent.colorIndex) }
 
     var body: some View {
         VStack(spacing: 8) {
             header
-            VStack(alignment: .leading, spacing: 12) {
-                summary
-                Rectangle().fill(theme.text.opacity(0.08)).frame(height: 1)
-                checklist
-                ActionBox(agent: agent, store: store)
-                if let cmd = agent.lastCommand {
-                    TerminalBox(command: cmd, output: agent.lastOutput, running: agent.commandRunning)
+            CappedScroll(maxHeight: max(160, store.maxPanelHeight - 56)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    summary
+                    Rectangle().fill(theme.text.opacity(0.08)).frame(height: 1)
+                    if !agent.subagents.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SUBAGENTS")
+                                .font(.system(size: 9.5, weight: .heavy))
+                                .foregroundColor(theme.secondary)
+                            SubagentList(subagents: agent.subagents, limit: 12, large: true)
+                        }
+                    }
+                    checklist
+                    ActionBox(agent: agent, store: store)
+                    if let cmd = agent.lastCommand {
+                        TerminalBox(command: cmd, output: agent.lastOutput, running: agent.commandRunning)
+                    }
                 }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 12).fill(theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .stroke(theme.accentInk, lineWidth: agent.highlight == nil ? 0 : 2))
+                .padding(1)   // keep the highlight outline inside the scroll area
             }
-            .padding(12)
-            .background(RoundedRectangle(cornerRadius: 12).fill(theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .stroke(theme.accentInk, lineWidth: agent.highlight == nil ? 0 : 2))
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 18).fill(theme.panel.opacity(0.97)))
@@ -247,15 +360,22 @@ struct DetailView: View {
     private var header: some View {
         HStack(spacing: 6) {
             IconButton(symbol: "chevron.left") { store.selectedID = nil }
-            ForEach(store.visibleAgents) { a in
-                Button { store.selectedID = a.id } label: {
-                    MiniBot(color: robotPalette[a.colorIndex % robotPalette.count],
-                            selected: a.id == agent.id,
-                            alert: a.highlight != nil)
+            // One mini robot per agent (needs-you first); scrolls sideways in a crowd.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(store.rankedAgents) { a in
+                        Button { store.selectedID = a.id } label: {
+                            MiniBot(color: robotColor(a.colorIndex),
+                                    selected: a.id == agent.id,
+                                    alert: a.highlight != nil)
+                        }
+                        .buttonStyle(.plain)
+                        .help(a.title)
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.vertical, 2)
             }
-            Spacer()
+            .frame(height: 28)   // a horizontal scroll view has no natural height of its own
             IconButton(symbol: "arrow.up.forward.square") { store.focus(agent) }
             IconButton(symbol: store.soundOn ? "speaker.wave.2" : "speaker.slash") { store.soundOn.toggle() }
             IconButton(symbol: "chevron.up") { store.collapsed = true }
@@ -268,7 +388,8 @@ struct DetailView: View {
 
     private var summary: some View {
         HStack(alignment: .top, spacing: 14) {
-            Robot(color: color, working: !agent.finished && agent.highlight == nil)
+            Robot(color: color, working: !agent.finished && agent.highlight == nil,
+                  variant: robotVariant(agent.colorIndex))
                 .scaleEffect(1.25)
                 .padding(.horizontal, 4)
                 .padding(.top, 6)
@@ -381,13 +502,14 @@ struct ChecklistRow: View {
 /// Clock-driven spinner (no repeatForever, so nothing leaks into layout).
 struct Spinner: View {
     @Environment(\.theme) private var theme
+    var size: CGFloat = 13
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Circle()
                 .trim(from: 0, to: 0.72)
-                .stroke(theme.text, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .frame(width: 13, height: 13)
+                .stroke(theme.text, style: StrokeStyle(lineWidth: size > 10 ? 2 : 1.5, lineCap: .round))
+                .frame(width: size, height: size)
                 .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1) * 360))
         }
     }
@@ -626,6 +748,8 @@ struct ProgressBar: View {
 struct Robot: View {
     let color: Color
     let working: Bool
+    /// 0 = plain, 1 = antenna, 2 = ears. Lets 36 agents each look different.
+    var variant: Int = 0
 
     // Driven by a clock instead of withAnimation(.repeatForever): that version
     // leaked the repeating animation into the whole layout, so every card's
@@ -639,7 +763,19 @@ struct Robot: View {
 
     private var figure: some View {
         VStack(spacing: 0) {
+            // Antenna slot is always there (empty for most) so every robot is the same height.
+            VStack(spacing: 0) {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Rectangle().fill(color).frame(width: 2, height: 3)
+            }
+            .opacity(variant == 1 ? 1 : 0)
             ZStack {
+                if variant == 2 {
+                    HStack(spacing: 34) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 4, height: 12)
+                        RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 4, height: 12)
+                    }
+                }
                 RoundedRectangle(cornerRadius: 7).fill(color).frame(width: 34, height: 40)
                 VStack(spacing: 7) {
                     HStack(spacing: 9) { eye; eye }
@@ -662,6 +798,135 @@ struct Robot: View {
 
     var leg: some View {
         Rectangle().fill(color).frame(width: 5, height: 7)
+    }
+}
+
+// MARK: Subagents
+
+/// "↳ Explore  Reading Views.swift" rows under a card (or in the detail view).
+struct SubagentList: View {
+    @Environment(\.theme) private var theme
+    let subagents: [SubAgent]
+    let limit: Int
+    var large = false
+
+    /// Running ones first, then the most recently finished.
+    private var ordered: [SubAgent] {
+        subagents.filter { !$0.finished } + Array(subagents.filter { $0.finished }.reversed())
+    }
+
+    var body: some View {
+        let shown = Array(ordered.prefix(limit))
+        VStack(alignment: .leading, spacing: large ? 7 : 3) {
+            ForEach(shown) { sub in
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: large ? 10 : 8.5, weight: .semibold))
+                        .foregroundColor(theme.tertiary)
+                    Group {
+                        if sub.finished {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: large ? 12 : 9.5))
+                                .foregroundColor(theme.secondary)
+                        } else {
+                            Spinner(size: large ? 11 : 8.5)
+                        }
+                    }
+                    .frame(width: large ? 13 : 10)
+                    Text(sub.type)
+                        .font(.system(size: large ? 12 : 10.5, weight: .semibold))
+                        .foregroundColor(theme.text.opacity(sub.finished ? 0.55 : 0.9))
+                        .lineLimit(1)
+                        .fixedSize()
+                    Text(sub.activity)
+                        .font(.system(size: large ? 12 : 10.5))
+                        .foregroundColor(sub.finished ? theme.tertiary : theme.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+            }
+            if subagents.count > shown.count {
+                Text("+\(subagents.count - shown.count) more")
+                    .font(.system(size: large ? 11 : 10))
+                    .foregroundColor(theme.tertiary)
+                    .padding(.leading, large ? 18 : 15)
+            }
+        }
+    }
+}
+
+// MARK: Crowded mode
+
+/// One-line row used when there are more than CrewStore.compactThreshold agents.
+struct CompactRow: View {
+    let agent: Agent
+    @ObservedObject var store: CrewStore
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            MiniBot(color: robotColor(agent.colorIndex), selected: true, alert: false)
+                .scaleEffect(0.85)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.text)
+                    .lineLimit(1)
+                Text(agent.statusLine)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if agent.runningSubagents > 0 {
+                Text("↳\(agent.runningSubagents)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(theme.secondary)
+                    .help("\(agent.runningSubagents) subagents running")
+            }
+            if agent.finished {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.secondary)
+            } else if !agent.tasks.isEmpty {
+                Text("\(agent.done)/\(agent.tasks.count)")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(theme.accentInk)
+                ProgressBar(fraction: agent.fraction)
+                    .frame(width: 40)
+            } else {
+                Spinner(size: 9)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.card))
+        .opacity(agent.finished ? 0.65 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture { store.selectedID = agent.id }   // open detail view
+        .help(agent.title)
+    }
+}
+
+/// Project folder label above a group of compact rows.
+struct SectionHeader: View {
+    @Environment(\.theme) private var theme
+    let title: String
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title.uppercased())
+                .font(.system(size: 9.5, weight: .heavy))
+                .foregroundColor(theme.secondary)
+                .lineLimit(1)
+            Text("\(count)")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundColor(theme.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
     }
 }
 

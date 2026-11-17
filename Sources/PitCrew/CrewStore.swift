@@ -16,6 +16,15 @@ struct ActivityItem: Identifiable {
     var done = false
 }
 
+/// A subagent (Claude's Task/Agent tool) running inside a session. Its hook
+/// events carry the parent's session_id plus its own agent_id / agent_type.
+struct SubAgent: Identifiable {
+    let id: String          // agent_id
+    var type: String        // agent_type, e.g. "Explore"
+    var activity = "Starting…"
+    var finished = false
+}
+
 struct CrewOption {
     let label: String
     let detail: String
@@ -34,7 +43,8 @@ struct PendingPermission {
     let tool: String
     let summary: String              // e.g. "Bash: npx hyperframes render . -o out.mp4"
     let input: [String: Any]         // original tool_input (echoed back for questions)
-    let questions: [CrewQuestion]  // non-empty for AskUserQuestion
+    let questions: [CrewQuestion]    // non-empty for AskUserQuestion
+    let agentID: String?             // which subagent asked (nil = the main agent)
     let expires: Date                // just before the hook's own timeout
     let reply: (Data) -> Void
 }
@@ -44,13 +54,16 @@ enum PermissionChoice { case allow, deny, terminal }
 struct Agent: Identifiable {
     let id: String                // Claude Code session_id
     var colorIndex: Int
+    var order: Int                // arrival order, for stable sorting
     var cwd = ""
     var title = ""
     var hasPrompt = false
     var activity = "Starting…"
     var tasks: [TaskItem] = []
     var attention: String?        // Notification text (e.g. waiting for input)
-    var permission: PendingPermission?
+    /// Prompts waiting on you, oldest first. Parallel subagents can each ask.
+    var permissions: [PendingPermission] = []
+    var subagents: [SubAgent] = []
     var finished = false
     var dismissed = false
 
@@ -60,21 +73,32 @@ struct Agent: Identifiable {
     var lastOutput = ""               // tail of its output
     var commandRunning = false
 
+    /// The prompt currently shown; the rest wait their turn.
+    var permission: PendingPermission? { permissions.first }
+
     var folder: String { (cwd as NSString).lastPathComponent }
     var done: Int { tasks.filter { $0.status == "completed" }.count }
     var fraction: Double { tasks.isEmpty ? 0 : Double(done) / Double(tasks.count) }
     var current: TaskItem? { tasks.first { $0.status == "in_progress" } }
+    var runningSubagents: Int { subagents.filter { !$0.finished }.count }
 
     /// Lime text shown instead of the status line when the agent needs you.
     var highlight: String? {
-        if let p = permission { return p.questions.isEmpty ? "needs permission" : "asks a question" }
+        if let p = permission {
+            let more = permissions.count > 1 ? " (+\(permissions.count - 1) more)" : ""
+            return (p.questions.isEmpty ? "needs permission" : "asks a question") + more
+        }
         return attention
     }
 
     /// Grey line under the title, e.g. "Rendering animations".
     var statusLine: String {
         if finished { return "Done, waiting for you" }
-        return current?.activeForm ?? activity
+        if let c = current?.activeForm { return c }
+        if runningSubagents > 0 {
+            return "Waiting on \(runningSubagents) subagent\(runningSubagents == 1 ? "" : "s")"
+        }
+        return activity
     }
 
     /// Label after "5/7", e.g. "Render 01-hook.mp4".
@@ -82,6 +106,14 @@ struct Agent: Identifiable {
         if let c = current { return c.content }
         if done == tasks.count { return "All tasks done" }
         return tasks.first { $0.status == "pending" }?.content ?? ""
+    }
+
+    /// Sort key: prompts first, then other alerts, then working, then finished.
+    var urgency: Int {
+        if permission != nil { return 0 }
+        if attention != nil { return 1 }
+        if !finished { return 2 }
+        return 3
     }
 }
 
@@ -91,6 +123,15 @@ final class CrewStore: ObservableObject {
     @Published var soundOn = true
     /// Which agent's detail view is open (nil = the list).
     @Published var selectedID: String?
+    /// Header filter: show only agents that need you.
+    @Published var onlyNeedsYou = false
+    /// Tallest the panel may get (set from the screen size by the app delegate).
+    @Published var maxPanelHeight: CGFloat = 800
+
+    /// Above this many agents, quiet agents shrink to one-line rows grouped by project.
+    static let compactThreshold = 8
+    /// How many finished subagents a card keeps showing.
+    static let keepFinishedSubagents = 3
 
     /// A Theme id or Theme.autoID. Remembered between launches.
     @Published var themeID: String = UserDefaults.standard.string(forKey: "theme") ?? Theme.pitLane.id {
@@ -116,7 +157,8 @@ final class CrewStore: ObservableObject {
     /// Hook timeout is 600s in settings.json and curl gives up at 590s.
     static let permissionWindow: TimeInterval = 585
 
-    private var nextColor = 0
+    private var nextOrder = 0
+    private var lastDing = Date.distantPast
     private let logURL: URL
     private var sweepTimer: Timer?
 
@@ -132,7 +174,20 @@ final class CrewStore: ObservableObject {
     }
 
     var visibleAgents: [Agent] { agents.filter { !$0.dismissed } }
-    var needsAttention: Bool { visibleAgents.contains { $0.highlight != nil } }
+    var needsYouCount: Int { visibleAgents.filter { $0.highlight != nil }.count }
+    var needsAttention: Bool { needsYouCount > 0 }
+
+    /// Every visible agent, the ones that need you first, otherwise arrival order.
+    var rankedAgents: [Agent] {
+        visibleAgents.sorted { ($0.urgency, $0.order) < ($1.urgency, $1.order) }
+    }
+
+    /// What the list shows: `rankedAgents`, minus the rest when the filter is on.
+    var sortedAgents: [Agent] {
+        rankedAgents.filter { !onlyNeedsYou || $0.highlight != nil }
+    }
+
+    var isCrowded: Bool { visibleAgents.count > Self.compactThreshold }
 
     // MARK: Requests
 
@@ -150,7 +205,7 @@ final class CrewStore: ObservableObject {
               let event = e["hook_event_name"] as? String else { return }
 
         if event == "SessionEnd" {
-            agents.first { $0.id == sid }?.permission?.reply(Data())
+            agents.first { $0.id == sid }?.permissions.forEach { $0.reply(Data()) }
             agents.removeAll { $0.id == sid }
             return
         }
@@ -159,12 +214,37 @@ final class CrewStore: ObservableObject {
         var a = agents[idx]
         let tool = e["tool_name"] as? String ?? ""
         let input = e["tool_input"] as? [String: Any] ?? [:]
+        // Set when the event comes from a subagent inside this session.
+        let agentID = (e["agent_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let agentType = (e["agent_type"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
-        // The agent moved on (you answered in the terminal, or the hook timed
-        // out), so any prompt still showing in Pit Crew is stale.
-        if ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"].contains(event) {
-            a.permission?.reply(Data())
-            a.permission = nil
+        // Whoever sent this moved on (answered in the terminal, or the hook timed
+        // out), so a prompt from that same agent still showing here is stale.
+        // Prompts from other subagents in this session are left alone.
+        if ["PreToolUse", "PostToolUse"].contains(event) {
+            Self.dropPermissions(&a) { $0.agentID == agentID }
+        } else if ["UserPromptSubmit", "Stop"].contains(event) {
+            Self.dropPermissions(&a) { _ in true }
+        }
+
+        // Subagent events update that subagent's row, not the parent's own state.
+        if let agentID, event != "SubagentStart", event != "SubagentStop" {
+            let sub = Self.subagentIndex(&a, agentID, type: agentType)
+            switch event {
+            case "PreToolUse":
+                a.subagents[sub].activity = Self.describe(tool: tool, input: input)
+                a.subagents[sub].finished = false
+            case "Notification":
+                if a.permission == nil && a.attention == nil {
+                    a.attention = e["message"] as? String ?? "Needs your input"
+                    a.dismissed = false
+                    ding()
+                }
+            default:
+                break
+            }
+            agents[idx] = a
+            return
         }
 
         switch event {
@@ -181,14 +261,29 @@ final class CrewStore: ObservableObject {
             a.attention = nil
             a.finished = false
             a.dismissed = false
+            a.subagents.removeAll { $0.finished }
+
+        case "SubagentStart":
+            guard let agentID else { break }
+            let i = Self.subagentIndex(&a, agentID, type: agentType)
+            a.subagents[i].finished = false
+            a.finished = false
+
+        case "SubagentStop":
+            // Claude Code sometimes sends a stop with no matching start; ignore those.
+            guard let agentID, let i = a.subagents.firstIndex(where: { $0.id == agentID }) else { break }
+            a.subagents[i].finished = true
+            a.subagents[i].activity = "Done"
+            Self.dropPermissions(&a) { $0.agentID == agentID }
+            Self.trimFinishedSubagents(&a)
 
         case "PreToolUse":
             a.attention = nil
             a.finished = false
             a.activity = Self.describe(tool: tool, input: input)
             if !Self.taskTools.contains(tool) {
-                // Tools run one after another, so anything older is finished
-                // (or was denied and will never get a PostToolUse).
+                // The main agent runs tools one after another, so anything older
+                // is finished (or was denied and will never get a PostToolUse).
                 for i in a.recent.indices { a.recent[i].done = true }
                 a.recent.append(ActivityItem(symbol: Self.symbol(for: tool), text: a.activity))
                 if a.recent.count > 8 { a.recent.removeFirst(a.recent.count - 8) }
@@ -222,12 +317,37 @@ final class CrewStore: ObservableObject {
             a.attention = nil
             a.commandRunning = false
             for i in a.recent.indices { a.recent[i].done = true }
+            for i in a.subagents.indices { a.subagents[i].finished = true }
+            Self.trimFinishedSubagents(&a)
             ding()
 
         default:
             break
         }
         agents[idx] = a
+    }
+
+    /// Finds or creates the row for a subagent (some never send SubagentStart).
+    private static func subagentIndex(_ a: inout Agent, _ agentID: String, type: String?) -> Int {
+        if let i = a.subagents.firstIndex(where: { $0.id == agentID }) {
+            if let type, a.subagents[i].type == "Subagent" { a.subagents[i].type = type }
+            return i
+        }
+        a.subagents.append(SubAgent(id: agentID, type: type ?? "Subagent"))
+        return a.subagents.count - 1
+    }
+
+    private static func trimFinishedSubagents(_ a: inout Agent) {
+        let finished = a.subagents.filter { $0.finished }
+        guard finished.count > Self.keepFinishedSubagents else { return }
+        let drop = Set(finished.prefix(finished.count - Self.keepFinishedSubagents).map(\.id))
+        a.subagents.removeAll { drop.contains($0.id) }
+    }
+
+    /// Answers matching prompts with "no decision" (the terminal takes over) and removes them.
+    private static func dropPermissions(_ a: inout Agent, where match: (PendingPermission) -> Bool) {
+        for p in a.permissions where match(p) { p.reply(Data()) }
+        a.permissions.removeAll(where: match)
     }
 
     // MARK: Permissions
@@ -237,6 +357,8 @@ final class CrewStore: ObservableObject {
         let tool = e["tool_name"] as? String ?? ""
         let input = e["tool_input"] as? [String: Any] ?? [:]
         guard let sid = e["session_id"] as? String else { req.reply(Data()); return }
+        let agentID = (e["agent_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let agentType = (e["agent_type"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
         let idx = agentIndex(sid, cwd: e["cwd"] as? String)
 
@@ -259,15 +381,21 @@ final class CrewStore: ObservableObject {
             return
         }
 
-        agents[idx].permission?.reply(Data())   // supersede anything older
-        agents[idx].permission = PendingPermission(
+        // A newer prompt from the same (sub)agent replaces its older one.
+        Self.dropPermissions(&agents[idx]) { $0.agentID == agentID }
+
+        var summary = Self.permissionSummary(tool: tool, input: input)
+        if agentID != nil { summary = "\(agentType ?? "Subagent") · " + summary }
+
+        agents[idx].permissions.append(PendingPermission(
             tool: tool,
-            summary: Self.permissionSummary(tool: tool, input: input),
+            summary: summary,
             input: input,
             questions: questions,
+            agentID: agentID,
             expires: Date().addingTimeInterval(Self.permissionWindow),
             reply: req.reply
-        )
+        ))
         agents[idx].attention = nil
         agents[idx].dismissed = false
         agents[idx].finished = false
@@ -275,18 +403,24 @@ final class CrewStore: ObservableObject {
         ding()
     }
 
-    func decide(_ agent: Agent, _ choice: PermissionChoice) {
+    /// Pops the prompt currently shown on this agent's card.
+    private func takeShownPermission(_ agent: Agent) -> (Int, PendingPermission)? {
         guard let i = agents.firstIndex(where: { $0.id == agent.id }),
-              let p = agents[i].permission else { return }
-        agents[i].permission = nil
+              let p = agents[i].permissions.first else { return nil }
+        agents[i].permissions.removeFirst()
+        return (i, p)
+    }
 
+    func decide(_ agent: Agent, _ choice: PermissionChoice) {
+        guard let taken = takeShownPermission(agent) else { return }
+        let (i, p) = taken
         switch choice {
         case .allow:
             p.reply(Self.decisionJSON(allow: true))
-            agents[i].activity = "Approved \(p.tool)"
+            if p.agentID == nil { agents[i].activity = "Approved \(p.tool)" }
         case .deny:
             p.reply(Self.decisionJSON(allow: false))
-            agents[i].activity = "Denied \(p.tool)"
+            if p.agentID == nil { agents[i].activity = "Denied \(p.tool)" }
         case .terminal:
             p.reply(Data())   // no decision → Claude Code shows its own prompt
             focus(agent)
@@ -295,19 +429,18 @@ final class CrewStore: ObservableObject {
 
     /// Answers an AskUserQuestion: `answers` maps question text → chosen label(s).
     func answer(_ agent: Agent, _ answers: [String: String]) {
-        guard let i = agents.firstIndex(where: { $0.id == agent.id }),
-              let p = agents[i].permission else { return }
-        agents[i].permission = nil
+        guard let taken = takeShownPermission(agent) else { return }
+        let (i, p) = taken
         var updated = p.input
         updated["answers"] = answers
         p.reply(Self.decisionJSON(allow: true, updatedInput: updated))
-        agents[i].activity = "Got your answer"
+        if p.agentID == nil { agents[i].activity = "Got your answer" }
     }
 
     private func clearExpiredPermissions() {
         let now = Date()
-        for i in agents.indices where (agents[i].permission?.expires ?? .distantFuture) < now {
-            agents[i].permission = nil
+        for i in agents.indices where agents[i].permissions.contains(where: { $0.expires < now }) {
+            agents[i].permissions.removeAll { $0.expires < now }
         }
     }
 
@@ -412,8 +545,11 @@ final class CrewStore: ObservableObject {
         }
     }
 
+    /// At most one chime every 1.5s, so a crowd of agents doesn't turn into a drumroll.
     private func ding() {
-        if soundOn { NSSound(named: "Glass")?.play() }
+        guard soundOn, Date().timeIntervalSince(lastDing) > 1.5 else { return }
+        lastDing = Date()
+        NSSound(named: "Glass")?.play()
     }
 
     // MARK: Helpers
@@ -423,8 +559,8 @@ final class CrewStore: ObservableObject {
         if let i = agents.firstIndex(where: { $0.id == sid }) {
             idx = i
         } else {
-            agents.append(Agent(id: sid, colorIndex: nextColor))
-            nextColor += 1
+            agents.append(Agent(id: sid, colorIndex: nextOrder, order: nextOrder))
+            nextOrder += 1
             idx = agents.count - 1
         }
         if let cwd { agents[idx].cwd = cwd }

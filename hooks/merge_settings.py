@@ -24,6 +24,8 @@ HOOKS = {
     "Notification": (None, EVENT_CMD, None),
     "Stop": (None, EVENT_CMD, None),
     "SessionEnd": (None, EVENT_CMD, None),
+    "SubagentStart": (None, EVENT_CMD, None),
+    "SubagentStop": (None, EVENT_CMD, None),
     # Waits for you to click Allow/Deny, so it needs a long timeout.
     "PermissionRequest": ("*", PERMISSION_CMD, 600),
 }

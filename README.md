@@ -23,6 +23,10 @@ desktop, and shows:
 - **A detail view**: click a card for the full checklist and the last terminal command
   with its output
 - **↗** to jump straight to that agent's VS Code window
+- **Subagents** listed under the agent that started them, each with its own status
+  and its own permission prompts
+- **Room for a crowd**: past 8 agents it switches to compact rows grouped by project,
+  with anything that needs you pinned to the top
 
 Everything runs locally. Pit Crew only listens on `127.0.0.1`.
 
@@ -51,6 +55,7 @@ it shows up in Pit Crew.
 |---|---|
 | `make install` | Build `PitCrew.app`, copy it to Applications, launch it, register the hooks |
 | `make demo` | Guided tour with four fake agents (Pit Crew must be running) |
+| `make crowd` | Stress test with 50 fake agents (`N=72 make crowd` for more) |
 | `make app` | Just build `build/PitCrew.app` |
 | `make hooks` | Just register the hooks in `~/.claude/settings.json` (safe to re-run) |
 | `make run` | Run from source with `swift run` (for development) |
@@ -62,13 +67,34 @@ itself): `./scripts/demo.py --fast`.
 ## Controls
 
 - **Click a card** to open its detail view. The mini robots at the top switch agents; **‹** goes back.
-- **⌃** collapses the panel to an "N agents running" pill. Click the pill to expand.
+- **≡** shows only the agents that need you.
+- **⌃** collapses the panel to a pill ("12 agents · 2 need you"). Click the pill to expand.
 - **↗** brings that project's VS Code window to the front.
 - **✕** on a card hides it until the agent needs you again. **✕** in the header hides the panel.
 - **🔊** mutes the sounds.
 - **🎨** cycles through the themes. Or pick one from the menu bar icon → **Theme**.
 - **Drag the header** to move the panel. It stays pinned by its top-right corner.
 - **Menu bar icon**: Show Pit Crew, Reset Position, Theme, Launch at Login, Quit.
+
+### Lots of agents
+
+- Agents that need you always sort to the top.
+- The panel never grows past the bottom of your screen; the list scrolls.
+- Past 8 agents, quiet ones shrink to one-line rows grouped by project folder, while
+  agents that need you keep their full cards with the Allow/Deny buttons.
+- Robots come in 12 colors × 3 head shapes, so 36 agents each look different.
+- Chimes are limited to one every 1.5 seconds.
+
+### Subagents
+
+When an agent hands work to subagents (Claude's Task/Agent tool), they appear under
+its card: "↳ Explore  Reading Views.swift". The detail view lists them all. If a
+subagent asks for permission, the prompt is labeled with its type
+("script-reviewer · Bash: …"), and the other subagents keep going. If several
+ask at once, the card shows the oldest prompt first and says how many more are waiting.
+
+An agent that launches separate Claude Code sessions (for example with `claude -p`)
+gets a separate card for each one, since they're separate sessions.
 
 ### Themes
 
@@ -98,6 +124,7 @@ to `~/.claude/settings.json`, after backing it up. Your other settings are left 
 | `PostToolUse` | Progress from TodoWrite / TaskCreate / TaskUpdate, command output |
 | `Notification` | Lime highlight + sound when Claude is waiting |
 | `Stop` | "Done, waiting for you" + sound |
+| `SubagentStart` / `SubagentStop` | Subagent rows under the parent's card |
 | `PermissionRequest` | Allow / Deny buttons, or the question with its options |
 
 **Permissions and questions.** `permission.sh` posts the request to Pit Crew,
@@ -147,6 +174,7 @@ Resources/           Info.plist and the app icon
 - "Always allow" button (via the hook's `updatedPermissions`)
 - VS Code extension so ↗ focuses the exact terminal tab, not just the window
 - Answering plan approvals (ExitPlanMode) from the panel
+- Linking separate `claude -p` sessions back to the agent that started them
 
 ## License
 
