@@ -168,13 +168,17 @@ scripts/             build-app.sh, install-hooks.sh, demo.py, uninstall.sh
 Resources/           Info.plist and the app icon
 ```
 
-## Roadmap
+## To-Do
 
-- Fix code signing in `build-app.sh` so **Launch at Login** works
-- "Always allow" button (via the hook's `updatedPermissions`)
-- VS Code extension so ↗ focuses the exact terminal tab, not just the window
-- Answering plan approvals (ExitPlanMode) from the panel
-- Linking separate `claude -p` sessions back to the agent that started them
+- [ ] **Fix Launch at Login**: code signing in `build-app.sh` fails on some Macs, and
+      macOS may refuse to register an unsigned app. First step: run
+      `codesign --force --sign - build/PitCrew.app` and look at the error.
+- [ ] **"Always allow" button**: stop Claude asking about the same command again
+      (via the hook's `updatedPermissions`)
+- [ ] **Jump to the exact terminal tab**: a small VS Code extension so ↗ focuses the
+      agent's terminal tab, not just its window
+- [ ] **Answer plan approvals** (ExitPlanMode) from the panel
+- [ ] **Link `claude -p` sessions** back to the agent that started them
 
 ## License
 
